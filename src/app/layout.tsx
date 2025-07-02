@@ -3,7 +3,7 @@ import './globals.css';
 import { Toaster } from "@/components/ui/toaster";
 
 export const metadata: Metadata = {
-  title: 'Qreator',
+  title: 'Uvify',
   description: 'Generate QR codes on your images',
 };
 

@@ -167,7 +167,7 @@ export default function Home() {
     const zipBlob = await zip.generateAsync({ type: "blob" });
     const a = document.createElement("a");
     a.href = URL.createObjectURL(zipBlob);
-    a.download = "qreator_outputs.zip";
+    a.download = "uvify_outputs.zip";
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
@@ -182,7 +182,7 @@ export default function Home() {
   return (
     <div className="min-h-screen bg-background text-foreground font-body">
       <header className="py-6 px-8 border-b border-border shadow-sm bg-card">
-        <h1 className="text-4xl font-bold font-headline text-primary">Qreator</h1>
+        <h1 className="text-4xl font-bold font-headline text-primary">Uvify</h1>
         <p className="text-muted-foreground mt-1">A simple tool to batch-create QR codes on images.</p>
       </header>
       
