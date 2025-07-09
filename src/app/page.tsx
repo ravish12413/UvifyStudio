@@ -1,14 +1,17 @@
+
 "use client";
 
 import { useState, useMemo, useCallback, ChangeEvent } from "react";
 import Image from "next/image";
-import { FileImage, FileText, Settings, Download, Loader2 } from "lucide-react";
+import { FileImage, Download, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Progress } from "@/components/ui/progress";
 import { Slider } from "@/components/ui/slider";
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useToast } from "@/hooks/use-toast";
 import Papa from "papaparse";
 import QRCode from "qrcode";
@@ -17,25 +20,23 @@ import JSZip from "jszip";
 const DPI = 300;
 const cmToPx = (cm: number) => Math.round((cm / 2.54) * DPI);
 
-type QrSettings = {
-  bgWidthCm: number;
-  bgHeightCm: number;
+type QrConfig = {
   qrSizeCm: number;
   marginTopCm: number;
   marginRightCm: number;
 };
 
 export default function Home() {
-  const [settings, setSettings] = useState<QrSettings>({
-    bgWidthCm: 16,
-    bgHeightCm: 9,
-    qrSizeCm: 3,
-    marginTopCm: 2.4,
-    marginRightCm: 0.9,
-  });
+  const [qrCount, setQrCount] = useState<1 | 2>(1);
+  const [bgDimensions, setBgDimensions] = useState({ widthCm: 16, heightCm: 9 });
+  const [qrConfigs, setQrConfigs] = useState<QrConfig[]>([
+    { qrSizeCm: 3, marginTopCm: 2.4, marginRightCm: 0.9 }, // QR1 config
+    { qrSizeCm: 3, marginTopCm: 2.4, marginRightCm: 5.0 }, // QR2 config
+  ]);
+  
   const [bgImage, setBgImage] = useState<{ file: File; url: string } | null>(null);
   const [csvFile, setCsvFile] = useState<File | null>(null);
-  const [links, setLinks] = useState<string[]>([]);
+  const [links, setLinks] = useState<Record<string, string>[]>([]);
   const [isProcessing, setIsProcessing] = useState(false);
   const [progress, setProgress] = useState(0);
   const { toast } = useToast();
@@ -56,28 +57,46 @@ export default function Home() {
     if (file) {
       if(file.type === 'text/csv' || file.name.endsWith('.csv')) {
         setCsvFile(file);
-        Papa.parse<{ links: string }>(file, {
+        setLinks([]); // Reset links on new file
+        Papa.parse(file, {
           header: true,
           skipEmptyLines: true,
-          delimiter: ",",
           complete: (results) => {
             if (results.errors.length > 0) {
               toast({ variant: "destructive", title: "CSV Parsing Error", description: results.errors[0].message });
               setLinks([]);
               return;
             }
-            if (!results.meta.fields?.includes("links")) {
-              toast({ variant: "destructive", title: "Invalid CSV", description: "CSV file must contain a 'links' column." });
+
+            const requiredColumns = qrCount === 1 ? ["links"] : ["links1", "links2"];
+            const hasRequiredColumns = requiredColumns.every(col => results.meta.fields?.includes(col));
+
+            if (!hasRequiredColumns) {
+              toast({ variant: "destructive", title: "Invalid CSV", description: `CSV must have column(s): ${requiredColumns.join(', ')}` });
               setLinks([]);
               setCsvFile(null);
               return;
             }
-            const parsedLinks = results.data.map(row => row.links?.trim()).filter(Boolean);
+            
+            const parsedLinks = (results.data as Record<string, string>[])
+              .map(row => {
+                  const linkData: Record<string, string> = {};
+                  let hasAnyLink = false;
+                  requiredColumns.forEach(col => {
+                      if (row[col] && typeof row[col] === 'string' && row[col].trim()) {
+                          linkData[col] = row[col].trim();
+                          hasAnyLink = true;
+                      }
+                  });
+                  return hasAnyLink ? linkData : null;
+              })
+              .filter(Boolean) as Record<string, string>[];
+
             setLinks(parsedLinks);
             if (parsedLinks.length > 0) {
-              toast({ title: "CSV Parsed", description: `Found ${parsedLinks.length} links.` });
+              toast({ title: "CSV Parsed", description: `Found ${parsedLinks.length} rows with links.` });
             } else {
-              toast({ variant: "destructive", title: "No Links Found", description: "The 'links' column in your CSV is empty." });
+              toast({ variant: "destructive", title: "No Links Found", description: `No valid links found in the '${requiredColumns.join("' and '")}' column(s).` });
             }
           },
         });
@@ -87,22 +106,37 @@ export default function Home() {
     }
   };
   
-  const handleSettingsChange = (key: keyof QrSettings, value: number) => {
-    setSettings(prev => ({ ...prev, [key]: value }));
+  const handleBgDimChange = (key: 'widthCm' | 'heightCm', value: number) => {
+    setBgDimensions(prev => ({ ...prev, [key]: value }));
+    setQrConfigs(prev => prev.map(config => ({
+        ...config,
+        marginTopCm: Math.min(config.marginTopCm, (key === 'heightCm' ? value : bgDimensions.heightCm) - config.qrSizeCm),
+        marginRightCm: Math.min(config.marginRightCm, (key === 'widthCm' ? value : bgDimensions.widthCm) - config.qrSizeCm)
+    })));
   };
 
-  const previewStyle = useMemo(() => {
-    if (!bgImage) return {};
-    const qrWidthPercent = (settings.qrSizeCm / settings.bgWidthCm) * 100;
-    const qrTopPercent = (settings.marginTopCm / settings.bgHeightCm) * 100;
-    const qrRightPercent = (settings.marginRightCm / settings.bgWidthCm) * 100;
+  const handleQrConfigChange = (index: number, key: keyof QrConfig, value: number) => {
+    setQrConfigs(prev => {
+        const newConfigs = [...prev];
+        newConfigs[index] = { ...newConfigs[index], [key]: value };
+        return newConfigs;
+    });
+  };
 
-    return {
-      top: `${qrTopPercent}%`,
-      right: `${qrRightPercent}%`,
-      width: `${qrWidthPercent}%`,
-    };
-  }, [settings, bgImage]);
+  const previewStyles = useMemo(() => {
+    return qrConfigs.slice(0, qrCount).map(config => {
+        if (!bgImage) return {};
+        const qrWidthPercent = (config.qrSizeCm / bgDimensions.widthCm) * 100;
+        const qrTopPercent = (config.marginTopCm / bgDimensions.heightCm) * 100;
+        const qrRightPercent = (config.marginRightCm / bgDimensions.widthCm) * 100;
+
+        return {
+            top: `${qrTopPercent}%`,
+            right: `${qrRightPercent}%`,
+            width: `${qrWidthPercent}%`,
+        };
+    });
+  }, [qrConfigs, qrCount, bgDimensions, bgImage]);
 
   const generateImages = useCallback(async () => {
     if (!bgImage || links.length === 0) {
@@ -122,8 +156,8 @@ export default function Home() {
       return;
     }
     
-    const outputWidthPx = cmToPx(settings.bgWidthCm);
-    const outputHeightPx = cmToPx(settings.bgHeightCm);
+    const outputWidthPx = cmToPx(bgDimensions.widthCm);
+    const outputHeightPx = cmToPx(bgDimensions.heightCm);
     canvas.width = outputWidthPx;
     canvas.height = outputHeightPx;
 
@@ -132,29 +166,39 @@ export default function Home() {
     await new Promise(resolve => { bgImageElement.onload = resolve; });
 
     for (let i = 0; i < links.length; i++) {
-      const link = links[i];
+      const linkData = links[i];
       
       ctx.drawImage(bgImageElement, 0, 0, outputWidthPx, outputHeightPx);
       
-      const qrDataUrl = await QRCode.toDataURL(link, { 
-        errorCorrectionLevel: 'H', 
-        margin: 0,
-        scale: 10, // A higher scale gives better quality for resizing
-        color: { light: '#FFFFFF00' } // Transparent background
-      });
+      for (let j = 0; j < qrCount; j++) {
+        const config = qrConfigs[j];
+        const linkKey = j === 0 ? (qrCount === 1 ? 'links' : 'links1') : 'links2';
+        const link = linkData[linkKey];
 
-      const qrImageElement = document.createElement('img');
-      qrImageElement.src = qrDataUrl;
-      await new Promise(resolve => { qrImageElement.onload = resolve; });
+        if (!link) {
+          console.warn(`Skipping QR ${j + 1} for row ${i + 1} due to missing link for key '${linkKey}'`);
+          continue;
+        }
 
-      const qrSizePx = cmToPx(settings.qrSizeCm);
-      const pasteX = outputWidthPx - qrSizePx - cmToPx(settings.marginRightCm);
-      const pasteY = cmToPx(settings.marginTopCm);
-      
-      // Add a white background behind the QR code for readability
-      ctx.fillStyle = "white";
-      ctx.fillRect(pasteX, pasteY, qrSizePx, qrSizePx);
-      ctx.drawImage(qrImageElement, pasteX, pasteY, qrSizePx, qrSizePx);
+        const qrDataUrl = await QRCode.toDataURL(link, { 
+            errorCorrectionLevel: 'H', 
+            margin: 0,
+            scale: 10, // A higher scale gives better quality for resizing
+            color: { light: '#FFFFFF00' } // Transparent background
+        });
+
+        const qrImageElement = document.createElement('img');
+        qrImageElement.src = qrDataUrl;
+        await new Promise(resolve => { qrImageElement.onload = resolve; });
+
+        const qrSizePx = cmToPx(config.qrSizeCm);
+        const pasteX = outputWidthPx - qrSizePx - cmToPx(config.marginRightCm);
+        const pasteY = cmToPx(config.marginTopCm);
+        
+        ctx.fillStyle = "white";
+        ctx.fillRect(pasteX, pasteY, qrSizePx, qrSizePx);
+        ctx.drawImage(qrImageElement, pasteX, pasteY, qrSizePx, qrSizePx);
+      }
       
       const blob = await new Promise<Blob | null>(resolve => canvas.toBlob(resolve, 'image/jpeg', 0.9));
       if (blob) {
@@ -175,9 +219,37 @@ export default function Home() {
     
     setIsProcessing(false);
     toast({ title: "Success!", description: "Your images have been generated and downloaded." });
-  }, [bgImage, links, settings, toast]);
+  }, [bgImage, links, qrConfigs, qrCount, bgDimensions, toast]);
 
   const fileInputStyles = "file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-primary/10 file:text-primary hover:file:bg-primary/20 cursor-pointer";
+  
+  const QrConfigControls = ({ index }: { index: number }) => {
+    const config = qrConfigs[index];
+    if (!config) return null;
+
+    return (
+      <div className="space-y-6 pt-2">
+        <div className="space-y-4">
+          <Label>QR Size (cm): {config.qrSizeCm.toFixed(1)}</Label>
+          <Slider value={[config.qrSizeCm]} onValueChange={([v]) => handleQrConfigChange(index, 'qrSizeCm', v)} min={1} max={Math.min(bgDimensions.widthCm, bgDimensions.heightCm)} step={0.1}/>
+        </div>
+        <div className="space-y-4">
+          <Label>Top Margin (cm): {config.marginTopCm.toFixed(1)}</Label>
+          <Slider value={[config.marginTopCm]} onValueChange={([v]) => handleQrConfigChange(index, 'marginTopCm', v)} min={0} max={bgDimensions.heightCm - config.qrSizeCm} step={0.1}/>
+        </div>
+        <div className="space-y-4">
+          <Label>Right Margin (cm): {config.marginRightCm.toFixed(1)}</Label>
+          <Slider value={[config.marginRightCm]} onValueChange={([v]) => handleQrConfigChange(index, 'marginRightCm', v)} min={0} max={bgDimensions.widthCm - config.qrSizeCm} step={0.1}/>
+        </div>
+      </div>
+    );
+  };
+
+  const csvDescription = useMemo(() => {
+    const cols = qrCount === 1 ? "'links'" : "'links1' and 'links2'";
+    return `File must have column(s) ${cols}. Found ${links.length} row(s).`
+  }, [qrCount, links.length]);
+
 
   return (
     <div className="min-h-screen bg-background text-foreground font-body">
@@ -190,50 +262,66 @@ export default function Home() {
         <div className="lg:col-span-2 flex flex-col gap-6">
           <Card className="shadow-md">
             <CardHeader>
-              <CardTitle className="flex items-center gap-3"><span className="flex items-center justify-center w-8 h-8 rounded-full bg-primary/10 text-primary font-bold">1</span>Upload Background</CardTitle>
+              <CardTitle className="flex items-center gap-3"><span className="flex items-center justify-center w-8 h-8 rounded-full bg-primary/10 text-primary font-bold">1</span>Upload Files</CardTitle>
             </CardHeader>
-            <CardContent>
-              <Input id="bg-upload" type="file" accept="image/*" onChange={handleBgImageChange} className={fileInputStyles}/>
+            <CardContent className="space-y-4">
+               <div>
+                 <Label htmlFor="bg-upload" className="mb-2 block">Background Image</Label>
+                 <Input id="bg-upload" type="file" accept="image/*" onChange={handleBgImageChange} className={fileInputStyles}/>
+               </div>
+               <div>
+                  <Label htmlFor="csv-upload" className="mb-2 block">Links CSV File</Label>
+                  <CardDescription className="mb-2 text-xs">{csvDescription}</CardDescription>
+                  <Input id="csv-upload" type="file" accept=".csv,text/csv" onChange={handleCsvChange} disabled={!bgImage} className={fileInputStyles}/>
+               </div>
             </CardContent>
           </Card>
 
           <Card className="shadow-md">
             <CardHeader>
-              <CardTitle className="flex items-center gap-3"><span className="flex items-center justify-center w-8 h-8 rounded-full bg-primary/10 text-primary font-bold">2</span>Upload CSV</CardTitle>
-              <CardDescription>File must have a column named 'links'. Found {links.length} link(s).</CardDescription>
-            </CardHeader>
-            <CardContent>
-              <Input id="csv-upload" type="file" accept=".csv,text/csv" onChange={handleCsvChange} disabled={!bgImage} className={fileInputStyles}/>
-            </CardContent>
-          </Card>
-
-          <Card className="shadow-md">
-            <CardHeader>
-              <CardTitle className="flex items-center gap-3"><span className="flex items-center justify-center w-8 h-8 rounded-full bg-primary/10 text-primary font-bold">3</span>Configure</CardTitle>
+              <CardTitle className="flex items-center gap-3"><span className="flex items-center justify-center w-8 h-8 rounded-full bg-primary/10 text-primary font-bold">2</span>Configure Layout</CardTitle>
             </CardHeader>
             <CardContent className="space-y-6 pt-2">
               <div className="grid grid-cols-2 gap-4">
                 <div className="space-y-2">
-                  <Label htmlFor="bg-width">Width (cm)</Label>
-                  <Input id="bg-width" type="number" value={settings.bgWidthCm} onChange={e => handleSettingsChange('bgWidthCm', +e.target.value)} />
+                  <Label htmlFor="bg-width">Image Width (cm)</Label>
+                  <Input id="bg-width" type="number" value={bgDimensions.widthCm} onChange={e => handleBgDimChange('widthCm', +e.target.value)} />
                 </div>
                  <div className="space-y-2">
-                  <Label htmlFor="bg-height">Height (cm)</Label>
-                  <Input id="bg-height" type="number" value={settings.bgHeightCm} onChange={e => handleSettingsChange('bgHeightCm', +e.target.value)} />
+                  <Label htmlFor="bg-height">Image Height (cm)</Label>
+                  <Input id="bg-height" type="number" value={bgDimensions.heightCm} onChange={e => handleBgDimChange('heightCm', +e.target.value)} />
                 </div>
               </div>
-               <div className="space-y-4">
-                  <Label>QR Size (cm): {settings.qrSizeCm.toFixed(1)}</Label>
-                  <Slider value={[settings.qrSizeCm]} onValueChange={([v]) => handleSettingsChange('qrSizeCm', v)} min={1} max={Math.min(settings.bgWidthCm, settings.bgHeightCm)} step={0.1}/>
-               </div>
-               <div className="space-y-4">
-                  <Label>Top Margin (cm): {settings.marginTopCm.toFixed(1)}</Label>
-                  <Slider value={[settings.marginTopCm]} onValueChange={([v]) => handleSettingsChange('marginTopCm', v)} min={0} max={settings.bgHeightCm - settings.qrSizeCm} step={0.1}/>
-               </div>
-               <div className="space-y-4">
-                  <Label>Right Margin (cm): {settings.marginRightCm.toFixed(1)}</Label>
-                  <Slider value={[settings.marginRightCm]} onValueChange={([v]) => handleSettingsChange('marginRightCm', v)} min={0} max={settings.bgWidthCm - settings.qrSizeCm} step={0.1}/>
-               </div>
+              <div className="space-y-2">
+                <Label>Number of QR Codes</Label>
+                <RadioGroup defaultValue="1" onValueChange={(v) => { setQrCount(v === '1' ? 1 : 2); setLinks([]); setCsvFile(null); }} className="flex gap-4 pt-1">
+                  <div className="flex items-center space-x-2">
+                    <RadioGroupItem value="1" id="r1" />
+                    <Label htmlFor="r1">One</Label>
+                  </div>
+                  <div className="flex items-center space-x-2">
+                    <RadioGroupItem value="2" id="r2" />
+                    <Label htmlFor="r2">Two</Label>
+                  </div>
+                </RadioGroup>
+              </div>
+
+               {qrCount === 1 ? (
+                 <QrConfigControls index={0} />
+               ) : (
+                 <Tabs defaultValue="qr1" className="w-full">
+                   <TabsList className="grid w-full grid-cols-2">
+                     <TabsTrigger value="qr1">QR 1 Settings</TabsTrigger>
+                     <TabsTrigger value="qr2">QR 2 Settings</TabsTrigger>
+                   </TabsList>
+                   <TabsContent value="qr1">
+                     <QrConfigControls index={0} />
+                   </TabsContent>
+                   <TabsContent value="qr2">
+                     <QrConfigControls index={1} />
+                   </TabsContent>
+                 </Tabs>
+               )}
             </CardContent>
           </Card>
           
@@ -260,14 +348,17 @@ export default function Home() {
                 {bgImage ? (
                   <>
                     <Image src={bgImage.url} alt="Background Preview" fill className="object-contain" />
-                    <div 
-                      className="absolute bg-primary/50 border-2 border-dashed border-accent"
-                      style={{...previewStyle, aspectRatio: '1 / 1'}}
-                    >
-                      <div className="w-full h-full flex items-center justify-center">
-                        <p className="text-white text-xs font-bold bg-black/50 px-2 py-1 rounded-full">QR</p>
+                    {previewStyles.map((style, index) => (
+                       <div 
+                        key={index}
+                        className="absolute bg-primary/50 border-2 border-dashed border-accent"
+                        style={{...style, aspectRatio: '1 / 1'}}
+                      >
+                        <div className="w-full h-full flex items-center justify-center">
+                          <p className="text-white text-xs font-bold bg-black/50 px-2 py-1 rounded-sm">QR {index+1}</p>
+                        </div>
                       </div>
-                    </div>
+                    ))}
                   </>
                 ) : (
                   <div className="text-center text-muted-foreground p-8">
@@ -283,3 +374,5 @@ export default function Home() {
     </div>
   );
 }
+
+    
