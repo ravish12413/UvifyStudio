@@ -61,6 +61,7 @@ export default function Home() {
         Papa.parse(file, {
           header: true,
           skipEmptyLines: true,
+          delimiter: ",",
           complete: (results) => {
             if (results.errors.length > 0) {
               toast({ variant: "destructive", title: "CSV Parsing Error", description: results.errors[0].message });
@@ -374,5 +375,3 @@ export default function Home() {
     </div>
   );
 }
-
-    
