@@ -62,6 +62,7 @@ export default function Home() {
           header: true,
           skipEmptyLines: true,
           delimiter: ",",
+          transformHeader: header => header.trim(),
           complete: (results) => {
             if (results.errors.length > 0) {
               toast({ variant: "destructive", title: "CSV Parsing Error", description: results.errors[0].message });
@@ -108,12 +109,18 @@ export default function Home() {
   };
   
   const handleBgDimChange = (key: 'widthCm' | 'heightCm', value: number) => {
-    setBgDimensions(prev => ({ ...prev, [key]: value }));
-    setQrConfigs(prev => prev.map(config => ({
-        ...config,
-        marginTopCm: Math.min(config.marginTopCm, (key === 'heightCm' ? value : bgDimensions.heightCm) - config.qrSizeCm),
-        marginRightCm: Math.min(config.marginRightCm, (key === 'widthCm' ? value : bgDimensions.widthCm) - config.qrSizeCm)
-    })));
+    const newBgDimensions = { ...bgDimensions, [key]: value || 0 };
+    setBgDimensions(newBgDimensions);
+
+    setQrConfigs(prevConfigs => prevConfigs.map(config => {
+        const newMaxTop = newBgDimensions.heightCm - config.qrSizeCm;
+        const newMaxRight = newBgDimensions.widthCm - config.qrSizeCm;
+        return {
+            ...config,
+            marginTopCm: Math.min(config.marginTopCm, newMaxTop < 0 ? 0 : newMaxTop),
+            marginRightCm: Math.min(config.marginRightCm, newMaxRight < 0 ? 0 : newMaxRight)
+        };
+    }));
   };
 
   const handleQrConfigChange = (index: number, key: keyof QrConfig, value: number) => {
