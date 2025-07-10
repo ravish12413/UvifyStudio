@@ -61,7 +61,6 @@ export default function Home() {
         Papa.parse(file, {
           header: true,
           skipEmptyLines: true,
-          delimiter: ",",
           transformHeader: header => header.trim(),
           complete: (results) => {
             if (results.errors.length > 0) {
@@ -180,7 +179,7 @@ export default function Home() {
       
       for (let j = 0; j < qrCount; j++) {
         const config = qrConfigs[j];
-        const linkKey = j === 0 ? (qrCount === 1 ? 'links' : 'links1') : 'links2';
+        const linkKey = qrCount === 1 ? 'links' : (j === 0 ? 'links1' : 'links2');
         const link = linkData[linkKey];
 
         if (!link) {
@@ -302,7 +301,7 @@ export default function Home() {
               </div>
               <div className="space-y-2">
                 <Label>Number of QR Codes</Label>
-                <RadioGroup defaultValue="1" onValueChange={(v) => { setQrCount(v === '1' ? 1 : 2); setLinks([]); setCsvFile(null); }} className="flex gap-4 pt-1">
+                <RadioGroup defaultValue="1" onValueChange={(v) => { setQrCount(v === '1' ? 1 : 2); setLinks([]); if (document.getElementById('csv-upload')) {(document.getElementById('csv-upload') as HTMLInputElement).value = ''}; setCsvFile(null); }} className="flex gap-4 pt-1">
                   <div className="flex items-center space-x-2">
                     <RadioGroupItem value="1" id="r1" />
                     <Label htmlFor="r1">One</Label>
@@ -382,3 +381,5 @@ export default function Home() {
     </div>
   );
 }
+
+    
