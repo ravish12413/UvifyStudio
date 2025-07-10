@@ -1,7 +1,7 @@
 
 "use client";
 
-import { useState, useMemo, useCallback, ChangeEvent } from "react";
+import { useState, useMemo, useCallback, ChangeEvent, useRef } from "react";
 import Image from "next/image";
 import { FileImage, Download, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -40,6 +40,7 @@ export default function Home() {
   const [isProcessing, setIsProcessing] = useState(false);
   const [progress, setProgress] = useState(0);
   const { toast } = useToast();
+  const csvInputRef = useRef<HTMLInputElement>(null);
 
   const handleBgImageChange = (e: ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -54,56 +55,71 @@ export default function Home() {
 
   const handleCsvChange = (e: ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (file) {
-      if(file.type === 'text/csv' || file.name.endsWith('.csv')) {
-        setCsvFile(file);
-        setLinks([]); // Reset links on new file
-        Papa.parse(file, {
-          header: true,
-          skipEmptyLines: true,
-          transformHeader: header => header.trim(),
-          complete: (results) => {
-            if (results.errors.length > 0) {
-              toast({ variant: "destructive", title: "CSV Parsing Error", description: results.errors[0].message });
-              setLinks([]);
-              return;
-            }
+    if (!file) return;
 
-            const requiredColumns = qrCount === 1 ? ["links"] : ["links1", "links2"];
-            const hasRequiredColumns = requiredColumns.every(col => results.meta.fields?.includes(col));
+    if (file.type === 'text/csv' || file.name.endsWith('.csv')) {
+      setCsvFile(file);
+      setLinks([]); // Reset links on new file
+      Papa.parse(file, {
+        header: true,
+        skipEmptyLines: true,
+        transformHeader: header => header.trim(),
+        complete: (results) => {
+          if (results.errors.length > 0) {
+            toast({ variant: "destructive", title: "CSV Parsing Error", description: results.errors[0].message });
+            setLinks([]);
+            return;
+          }
 
-            if (!hasRequiredColumns) {
-              toast({ variant: "destructive", title: "Invalid CSV", description: `CSV must have column(s): ${requiredColumns.join(', ')}` });
-              setLinks([]);
-              setCsvFile(null);
-              return;
-            }
-            
-            const parsedLinks = (results.data as Record<string, string>[])
-              .map(row => {
-                  const linkData: Record<string, string> = {};
-                  let hasAnyLink = false;
-                  requiredColumns.forEach(col => {
-                      if (row[col] && typeof row[col] === 'string' && row[col].trim()) {
-                          linkData[col] = row[col].trim();
-                          hasAnyLink = true;
-                      }
-                  });
-                  return hasAnyLink ? linkData : null;
-              })
-              .filter(Boolean) as Record<string, string>[];
+          const requiredColumns = qrCount === 1 ? ["links"] : ["links1", "links2"];
+          const hasRequiredColumns = requiredColumns.every(col => results.meta.fields?.includes(col));
 
-            setLinks(parsedLinks);
-            if (parsedLinks.length > 0) {
-              toast({ title: "CSV Parsed", description: `Found ${parsedLinks.length} rows with links.` });
-            } else {
-              toast({ variant: "destructive", title: "No Links Found", description: `No valid links found in the '${requiredColumns.join("' and '")}' column(s).` });
-            }
-          },
-        });
-      } else {
-        toast({ variant: "destructive", title: "Invalid File", description: "Please upload a valid CSV file." });
-      }
+          if (!hasRequiredColumns) {
+            toast({ variant: "destructive", title: "Invalid CSV", description: `CSV must have column(s): ${requiredColumns.join(', ')}` });
+            setLinks([]);
+            setCsvFile(null);
+            if (csvInputRef.current) csvInputRef.current.value = "";
+            return;
+          }
+          
+          const parsedLinks = (results.data as Record<string, string>[])
+            .map(row => {
+                const linkData: Record<string, string> = {};
+                let hasAnyLink = false;
+                
+                if (qrCount === 1) {
+                    if (row.links && typeof row.links === 'string' && row.links.trim()) {
+                        linkData.links = row.links.trim();
+                        hasAnyLink = true;
+                    }
+                } else {
+                    if (row.links1 && typeof row.links1 === 'string' && row.links1.trim()) {
+                        linkData.links1 = row.links1.trim();
+                        hasAnyLink = true;
+                    }
+                    if (row.links2 && typeof row.links2 === 'string' && row.links2.trim()) {
+                        linkData.links2 = row.links2.trim();
+                        hasAnyLink = true;
+                    }
+                }
+                return hasAnyLink ? linkData : null;
+            })
+            .filter(Boolean) as Record<string, string>[];
+
+          setLinks(parsedLinks);
+          if (parsedLinks.length > 0) {
+            toast({ title: "CSV Parsed", description: `Found ${parsedLinks.length} rows with links.` });
+          } else {
+            toast({ variant: "destructive", title: "No Links Found", description: `No valid link data found in the required column(s).` });
+          }
+        },
+        error: (error) => {
+            toast({ variant: "destructive", title: "CSV Parsing Error", description: error.message });
+            setLinks([]);
+        }
+      });
+    } else {
+      toast({ variant: "destructive", title: "Invalid File", description: "Please upload a valid CSV file." });
     }
   };
   
@@ -227,6 +243,16 @@ export default function Home() {
     setIsProcessing(false);
     toast({ title: "Success!", description: "Your images have been generated and downloaded." });
   }, [bgImage, links, qrConfigs, qrCount, bgDimensions, toast]);
+  
+  const handleQrCountChange = (value: string) => {
+    const count = value === '1' ? 1 : 2;
+    setQrCount(count);
+    setLinks([]);
+    setCsvFile(null);
+    if (csvInputRef.current) {
+        csvInputRef.current.value = "";
+    }
+  };
 
   const fileInputStyles = "file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-primary/10 file:text-primary hover:file:bg-primary/20 cursor-pointer";
   
@@ -279,7 +305,7 @@ export default function Home() {
                <div>
                   <Label htmlFor="csv-upload" className="mb-2 block">Links CSV File</Label>
                   <CardDescription className="mb-2 text-xs">{csvDescription}</CardDescription>
-                  <Input id="csv-upload" type="file" accept=".csv,text/csv" onChange={handleCsvChange} disabled={!bgImage} className={fileInputStyles}/>
+                  <Input id="csv-upload" ref={csvInputRef} type="file" accept=".csv,text/csv" onChange={handleCsvChange} disabled={!bgImage} className={fileInputStyles}/>
                </div>
             </CardContent>
           </Card>
@@ -301,7 +327,7 @@ export default function Home() {
               </div>
               <div className="space-y-2">
                 <Label>Number of QR Codes</Label>
-                <RadioGroup defaultValue="1" onValueChange={(v) => { setQrCount(v === '1' ? 1 : 2); setLinks([]); if (document.getElementById('csv-upload')) {(document.getElementById('csv-upload') as HTMLInputElement).value = ''}; setCsvFile(null); }} className="flex gap-4 pt-1">
+                <RadioGroup defaultValue="1" onValueChange={handleQrCountChange} className="flex gap-4 pt-1">
                   <div className="flex items-center space-x-2">
                     <RadioGroupItem value="1" id="r1" />
                     <Label htmlFor="r1">One</Label>
@@ -381,5 +407,3 @@ export default function Home() {
     </div>
   );
 }
-
-    
