@@ -56,13 +56,18 @@ export default function Home() {
       setLinks([]); 
       Papa.parse(file, {
         header: true,
+        delimiter: ",",
         skipEmptyLines: true,
         transformHeader: header => header.trim(),
         complete: (results) => {
           if (results.errors.length > 0) {
-            toast({ variant: "destructive", title: "CSV Parsing Error", description: results.errors[0].message });
-            setLinks([]);
-            return;
+            // We'll ignore the "Unable to auto-detect" warning since we explicitly set the delimiter.
+            const criticalErrors = results.errors.filter(e => e.code !== 'UndetectableDelimiter');
+            if (criticalErrors.length > 0) {
+              toast({ variant: "destructive", title: "CSV Parsing Error", description: criticalErrors[0].message });
+              setLinks([]);
+              return;
+            }
           }
 
           if (!results.meta.fields?.includes("links")) {
@@ -207,7 +212,7 @@ export default function Home() {
   return (
     <div className="min-h-screen bg-background text-foreground font-body">
       <header className="py-6 px-8 border-b border-border shadow-sm bg-card">
-        <h1 className="text-4xl font-bold font-headline text-primary">Qreator</h1>
+        <h1 className="text-4xl font-bold font-headline text-primary">Uvify</h1>
         <p className="text-muted-foreground mt-1">A simple tool to batch-create QR codes on images.</p>
       </header>
       
