@@ -24,6 +24,79 @@ type QrConfig = {
   marginRightCm: number;
 };
 
+// Helper function to set DPI in JPEG blob
+const setDpi = (blob: Blob, dpi: number): Promise<Blob> => {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      try {
+        const arrayBuffer = e.target?.result as ArrayBuffer;
+        if (!arrayBuffer) {
+          throw new Error("Could not read blob as ArrayBuffer");
+        }
+        const view = new DataView(arrayBuffer);
+        const segments = [];
+        let offset = 0;
+
+        // SOI
+        offset += 2;
+
+        while (offset < view.byteLength) {
+            const marker = view.getUint16(offset);
+            offset += 2;
+
+            if (marker === 0xFFE0) { // APP0
+                const len = view.getUint16(offset);
+                // Skip this segment, we will replace it.
+                offset += len;
+            } else if (marker >= 0xFFD0 && marker <= 0xFFD9 || marker === 0xFF01) { // Markers without length
+                // No length field
+            } else if (marker === 0xFFDA) { // SOS - Start of Scan
+                // The rest of the file is image data, copy it and break
+                segments.push(arrayBuffer.slice(offset - 2));
+                break;
+            } else { // Other markers
+                const len = view.getUint16(offset);
+                segments.push(arrayBuffer.slice(offset-2, offset + len));
+                offset += len;
+            }
+        }
+        
+        // Create new APP0 segment
+        const app0Data = new Uint8Array(16);
+        const app0View = new DataView(app0Data.buffer);
+        app0View.setUint16(0, 0xFFE0); // APP0 marker
+        app0View.setUint16(2, 16); // Length of segment
+        // JFIF\0
+        app0View.setUint8(4, 0x4A);
+        app0View.setUint8(5, 0x46);
+        app0View.setUint8(6, 0x49);
+        app0View.setUint8(7, 0x46);
+        app0View.setUint8(8, 0x00);
+        app0View.setUint16(9, 0x0101); // Version 1.1
+        app0View.setUint8(11, 1); // Units: 1 for DPI
+        app0View.setUint16(12, dpi); // X density
+        app0View.setUint16(14, dpi); // Y density
+
+        const soi = new Uint8Array([0xFF, 0xD8]); // SOI marker
+        const newBlobParts = [soi, app0Data, ...segments];
+        
+        resolve(new Blob(newBlobParts, { type: 'image/jpeg' }));
+
+      } catch(error) {
+        console.error("Error setting DPI:", error);
+        resolve(blob); // Fallback to original blob
+      }
+    };
+    reader.onerror = (err) => {
+      console.error("FileReader error:", err);
+      resolve(blob);
+    };
+    reader.readAsArrayBuffer(blob);
+  });
+};
+
+
 export default function Home() {
   const [bgDimensions, setBgDimensions] = useState({ widthCm: 16, heightCm: 9 });
   const [qrConfig, setQrConfig] = useState<QrConfig>({ qrSizeCm: 3, marginTopCm: 2.4, marginRightCm: 0.9 });
@@ -60,14 +133,12 @@ export default function Home() {
         skipEmptyLines: true,
         transformHeader: header => header.trim(),
         complete: (results) => {
-          if (results.errors.length > 0) {
-            // We'll ignore the "Unable to auto-detect" warning since we explicitly set the delimiter.
-            const criticalErrors = results.errors.filter(e => e.code !== 'UndetectableDelimiter');
-            if (criticalErrors.length > 0) {
+          // We'll ignore the "Unable to auto-detect" warning since we explicitly set the delimiter.
+          const criticalErrors = results.errors.filter(e => e.code !== 'UndetectableDelimiter');
+          if (criticalErrors.length > 0) {
               toast({ variant: "destructive", title: "CSV Parsing Error", description: criticalErrors[0].message });
               setLinks([]);
               return;
-            }
           }
 
           if (!results.meta.fields?.includes("links")) {
@@ -183,7 +254,8 @@ export default function Home() {
       
       const blob = await new Promise<Blob | null>(resolve => canvas.toBlob(resolve, 'image/jpeg', 0.9));
       if (blob) {
-        zip.file(`qr_image_${i + 1}.jpg`, blob);
+        const dpiBlob = await setDpi(blob, DPI);
+        zip.file(`qr_image_${i + 1}.jpg`, dpiBlob);
       }
       
       setProgress(((i + 1) / links.length) * 100);
