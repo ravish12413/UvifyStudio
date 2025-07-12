@@ -1,7 +1,7 @@
 
 "use client";
 
-import { useState, useMemo, useCallback, ChangeEvent, useRef } from "react";
+import { useState, useMemo, useCallback, ChangeEvent, useRef, useEffect } from "react";
 import Image from "next/image";
 import { FileImage, Download, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -105,7 +105,7 @@ export default function Home() {
   const [bgDimensions, setBgDimensions] = useState({ widthCm: 16, heightCm: 9 });
   const [qrConfig, setQrConfig] = useState<QrConfig>({ qrSizeCm: 3, marginTopCm: 2.4, marginRightCm: 0.9 });
   
-  const [bgImage, setBgImage] = useState<{ file: File; url: string } | null>(null);
+  const [bgImage, setBgImage] = useState<{ file: File; url: string; width: number; height: number; } | null>(null);
   const [csvFile, setCsvFile] = useState<File | null>(null);
   const [links, setLinks] = useState<Record<string, string>[]>([]);
   const [isProcessing, setIsProcessing] = useState(false);
@@ -117,7 +117,12 @@ export default function Home() {
     const file = e.target.files?.[0];
     if (file) {
       if(file.type.startsWith('image/')) {
-        setBgImage({ file, url: URL.createObjectURL(file) });
+        const url = URL.createObjectURL(file);
+        const img = document.createElement('img');
+        img.onload = () => {
+            setBgImage({ file, url, width: img.width, height: img.height });
+        };
+        img.src = url;
       } else {
         toast({ variant: "destructive", title: "Invalid File", description: "Please upload a valid image file (JPG, PNG, etc.)." });
       }
@@ -137,13 +142,6 @@ export default function Home() {
         skipEmptyLines: true,
         transformHeader: header => header.trim(),
         complete: (results) => {
-          const criticalErrors = results.errors.filter(e => e.code !== 'UndetectableDelimiter');
-          if (criticalErrors.length > 0) {
-              toast({ variant: "destructive", title: "CSV Parsing Error", description: criticalErrors[0].message });
-              setLinks([]);
-              return;
-          }
-
           if (!results.meta.fields?.includes("links")) {
             toast({ variant: "destructive", title: "Invalid CSV", description: "CSV must have a 'links' column." });
             setLinks([]);
@@ -192,17 +190,43 @@ export default function Home() {
 
   const previewStyle = useMemo(() => {
     if (!bgImage) return {};
-    const qrWidthPercent = (qrConfig.qrSizeCm / bgDimensions.widthCm) * 100;
-    const qrTopPercent = (qrConfig.marginTopCm / bgDimensions.heightCm) * 100;
-    const qrRightPercent = (qrConfig.marginRightCm / bgDimensions.widthCm) * 100;
+
+    const containerAspectRatio = bgDimensions.widthCm / bgDimensions.heightCm;
+    const imageAspectRatio = bgImage.width / bgImage.height;
+
+    let scaleFactor: number;
+    let offsetXPercent = 0;
+    let offsetYPercent = 0;
+    let scaledWidthPercent: number;
+    let scaledHeightPercent: number;
+    
+    if (imageAspectRatio > containerAspectRatio) {
+        // Image is wider, letterboxed (top/bottom bars)
+        scaledWidthPercent = 100;
+        scaledHeightPercent = (containerAspectRatio / imageAspectRatio) * 100;
+        offsetYPercent = (100 - scaledHeightPercent) / 2;
+    } else {
+        // Image is taller, pillarboxed (left/right bars)
+        scaledHeightPercent = 100;
+        scaledWidthPercent = (imageAspectRatio / containerAspectRatio) * 100;
+        offsetXPercent = (100 - scaledWidthPercent) / 2;
+    }
+    
+    // Calculate QR position relative to the scaled image
+    const qrSizePercent = (qrConfig.qrSizeCm / bgDimensions.widthCm) * scaledWidthPercent;
+    const qrTopPercent = (qrConfig.marginTopCm / bgDimensions.heightCm) * scaledHeightPercent;
+    const qrRightPercent = (qrConfig.marginRightCm / bgDimensions.widthCm) * scaledWidthPercent;
 
     return {
-        top: `${qrTopPercent}%`,
-        right: `${qrRightPercent}%`,
-        width: `${qrWidthPercent}%`,
-        aspectRatio: '1 / 1'
+      position: 'absolute',
+      top: `${offsetYPercent + qrTopPercent}%`,
+      right: `${offsetXPercent + qrRightPercent}%`,
+      width: `${qrSizePercent}%`,
+      aspectRatio: '1 / 1'
     };
+
   }, [qrConfig, bgDimensions, bgImage]);
+
 
   const generateImages = useCallback(async () => {
     if (!bgImage || links.length === 0) {
@@ -270,7 +294,6 @@ export default function Home() {
       await new Promise(resolve => { qrImageElement.onload = resolve; });
 
       const qrSizePx = cmToPx(qrConfig.qrSizeCm);
-      // Calculate placement based on the scaled image, not the whole canvas
       const pasteX = offsetX + drawWidth - qrSizePx - cmToPx(qrConfig.marginRightCm);
       const pasteY = offsetY + cmToPx(qrConfig.marginTopCm);
       
@@ -384,12 +407,12 @@ export default function Home() {
                 <CardDescription>A representation of your final image layout. The QR code will be placed relative to the background image content, which will be centered and scaled to fit.</CardDescription>
              </CardHeader>
              <CardContent>
-               <div className="aspect-video bg-muted/50 rounded-lg flex items-center justify-center relative overflow-hidden border">
+               <div className="aspect-video bg-muted/50 rounded-lg flex items-center justify-center relative overflow-hidden border" style={{ aspectRatio: `${bgDimensions.widthCm} / ${bgDimensions.heightCm}` }}>
                 {bgImage ? (
                   <>
                     <Image src={bgImage.url} alt="Background Preview" fill className="object-contain" />
                     <div 
-                      className="absolute bg-primary/50 border-2 border-dashed border-accent"
+                      className="bg-primary/50 border-2 border-dashed border-accent"
                       style={previewStyle}
                     >
                       <div className="w-full h-full flex items-center justify-center">
