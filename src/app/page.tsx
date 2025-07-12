@@ -10,8 +10,6 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Progress } from "@/components/ui/progress";
 import { Slider } from "@/components/ui/slider";
-import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useToast } from "@/hooks/use-toast";
 import Papa from "papaparse";
 import QRCode from "qrcode";
@@ -27,12 +25,8 @@ type QrConfig = {
 };
 
 export default function Home() {
-  const [qrCount, setQrCount] = useState<1 | 2>(1);
   const [bgDimensions, setBgDimensions] = useState({ widthCm: 16, heightCm: 9 });
-  const [qrConfigs, setQrConfigs] = useState<QrConfig[]>([
-    { qrSizeCm: 3, marginTopCm: 2.4, marginRightCm: 0.9 }, // QR1 config
-    { qrSizeCm: 3, marginTopCm: 2.4, marginRightCm: 5.0 }, // QR2 config
-  ]);
+  const [qrConfig, setQrConfig] = useState<QrConfig>({ qrSizeCm: 3, marginTopCm: 2.4, marginRightCm: 0.9 });
   
   const [bgImage, setBgImage] = useState<{ file: File; url: string } | null>(null);
   const [csvFile, setCsvFile] = useState<File | null>(null);
@@ -59,7 +53,7 @@ export default function Home() {
 
     if (file.type === 'text/csv' || file.name.endsWith('.csv')) {
       setCsvFile(file);
-      setLinks([]); // Reset links on new file
+      setLinks([]); 
       Papa.parse(file, {
         header: true,
         skipEmptyLines: true,
@@ -71,11 +65,8 @@ export default function Home() {
             return;
           }
 
-          const requiredColumns = qrCount === 1 ? ["links"] : ["links1", "links2"];
-          const hasRequiredColumns = requiredColumns.every(col => results.meta.fields?.includes(col));
-
-          if (!hasRequiredColumns) {
-            toast({ variant: "destructive", title: "Invalid CSV", description: `CSV must have column(s): ${requiredColumns.join(', ')}` });
+          if (!results.meta.fields?.includes("links")) {
+            toast({ variant: "destructive", title: "Invalid CSV", description: "CSV must have a 'links' column." });
             setLinks([]);
             setCsvFile(null);
             if (csvInputRef.current) csvInputRef.current.value = "";
@@ -83,34 +74,14 @@ export default function Home() {
           }
           
           const parsedLinks = (results.data as Record<string, string>[])
-            .map(row => {
-                const linkData: Record<string, string> = {};
-                let hasAnyLink = false;
-                
-                if (qrCount === 1) {
-                    if (row.links && typeof row.links === 'string' && row.links.trim()) {
-                        linkData.links = row.links.trim();
-                        hasAnyLink = true;
-                    }
-                } else {
-                    if (row.links1 && typeof row.links1 === 'string' && row.links1.trim()) {
-                        linkData.links1 = row.links1.trim();
-                        hasAnyLink = true;
-                    }
-                    if (row.links2 && typeof row.links2 === 'string' && row.links2.trim()) {
-                        linkData.links2 = row.links2.trim();
-                        hasAnyLink = true;
-                    }
-                }
-                return hasAnyLink ? linkData : null;
-            })
+            .map(row => (row.links && row.links.trim() ? { links: row.links.trim() } : null))
             .filter(Boolean) as Record<string, string>[];
 
           setLinks(parsedLinks);
           if (parsedLinks.length > 0) {
             toast({ title: "CSV Parsed", description: `Found ${parsedLinks.length} rows with links.` });
           } else {
-            toast({ variant: "destructive", title: "No Links Found", description: `No valid link data found in the required column(s).` });
+            toast({ variant: "destructive", title: "No Links Found", description: "No valid data found in the 'links' column." });
           }
         },
         error: (error) => {
@@ -127,39 +98,32 @@ export default function Home() {
     const newBgDimensions = { ...bgDimensions, [key]: value || 0 };
     setBgDimensions(newBgDimensions);
 
-    setQrConfigs(prevConfigs => prevConfigs.map(config => {
-        const newMaxTop = newBgDimensions.heightCm - config.qrSizeCm;
-        const newMaxRight = newBgDimensions.widthCm - config.qrSizeCm;
-        return {
-            ...config,
-            marginTopCm: Math.min(config.marginTopCm, newMaxTop < 0 ? 0 : newMaxTop),
-            marginRightCm: Math.min(config.marginRightCm, newMaxRight < 0 ? 0 : newMaxRight)
-        };
+    const newMaxTop = newBgDimensions.heightCm - qrConfig.qrSizeCm;
+    const newMaxRight = newBgDimensions.widthCm - qrConfig.qrSizeCm;
+    setQrConfig(prevConfig => ({
+        ...prevConfig,
+        marginTopCm: Math.min(prevConfig.marginTopCm, newMaxTop < 0 ? 0 : newMaxTop),
+        marginRightCm: Math.min(prevConfig.marginRightCm, newMaxRight < 0 ? 0 : newMaxRight)
     }));
   };
 
-  const handleQrConfigChange = (index: number, key: keyof QrConfig, value: number) => {
-    setQrConfigs(prev => {
-        const newConfigs = [...prev];
-        newConfigs[index] = { ...newConfigs[index], [key]: value };
-        return newConfigs;
-    });
+  const handleQrConfigChange = (key: keyof QrConfig, value: number) => {
+    setQrConfig(prev => ({ ...prev, [key]: value }));
   };
 
-  const previewStyles = useMemo(() => {
-    return qrConfigs.slice(0, qrCount).map(config => {
-        if (!bgImage) return {};
-        const qrWidthPercent = (config.qrSizeCm / bgDimensions.widthCm) * 100;
-        const qrTopPercent = (config.marginTopCm / bgDimensions.heightCm) * 100;
-        const qrRightPercent = (config.marginRightCm / bgDimensions.widthCm) * 100;
+  const previewStyle = useMemo(() => {
+    if (!bgImage) return {};
+    const qrWidthPercent = (qrConfig.qrSizeCm / bgDimensions.widthCm) * 100;
+    const qrTopPercent = (qrConfig.marginTopCm / bgDimensions.heightCm) * 100;
+    const qrRightPercent = (qrConfig.marginRightCm / bgDimensions.widthCm) * 100;
 
-        return {
-            top: `${qrTopPercent}%`,
-            right: `${qrRightPercent}%`,
-            width: `${qrWidthPercent}%`,
-        };
-    });
-  }, [qrConfigs, qrCount, bgDimensions, bgImage]);
+    return {
+        top: `${qrTopPercent}%`,
+        right: `${qrRightPercent}%`,
+        width: `${qrWidthPercent}%`,
+        aspectRatio: '1 / 1'
+    };
+  }, [qrConfig, bgDimensions, bgImage]);
 
   const generateImages = useCallback(async () => {
     if (!bgImage || links.length === 0) {
@@ -189,39 +153,28 @@ export default function Home() {
     await new Promise(resolve => { bgImageElement.onload = resolve; });
 
     for (let i = 0; i < links.length; i++) {
-      const linkData = links[i];
+      const link = links[i].links;
       
       ctx.drawImage(bgImageElement, 0, 0, outputWidthPx, outputHeightPx);
       
-      for (let j = 0; j < qrCount; j++) {
-        const config = qrConfigs[j];
-        const linkKey = qrCount === 1 ? 'links' : (j === 0 ? 'links1' : 'links2');
-        const link = linkData[linkKey];
+      const qrDataUrl = await QRCode.toDataURL(link, { 
+          errorCorrectionLevel: 'H', 
+          margin: 0,
+          scale: 10,
+          color: { light: '#FFFFFF00' }
+      });
 
-        if (!link) {
-          console.warn(`Skipping QR ${j + 1} for row ${i + 1} due to missing link for key '${linkKey}'`);
-          continue;
-        }
+      const qrImageElement = document.createElement('img');
+      qrImageElement.src = qrDataUrl;
+      await new Promise(resolve => { qrImageElement.onload = resolve; });
 
-        const qrDataUrl = await QRCode.toDataURL(link, { 
-            errorCorrectionLevel: 'H', 
-            margin: 0,
-            scale: 10, // A higher scale gives better quality for resizing
-            color: { light: '#FFFFFF00' } // Transparent background
-        });
-
-        const qrImageElement = document.createElement('img');
-        qrImageElement.src = qrDataUrl;
-        await new Promise(resolve => { qrImageElement.onload = resolve; });
-
-        const qrSizePx = cmToPx(config.qrSizeCm);
-        const pasteX = outputWidthPx - qrSizePx - cmToPx(config.marginRightCm);
-        const pasteY = cmToPx(config.marginTopCm);
-        
-        ctx.fillStyle = "white";
-        ctx.fillRect(pasteX, pasteY, qrSizePx, qrSizePx);
-        ctx.drawImage(qrImageElement, pasteX, pasteY, qrSizePx, qrSizePx);
-      }
+      const qrSizePx = cmToPx(qrConfig.qrSizeCm);
+      const pasteX = outputWidthPx - qrSizePx - cmToPx(qrConfig.marginRightCm);
+      const pasteY = cmToPx(qrConfig.marginTopCm);
+      
+      ctx.fillStyle = "white";
+      ctx.fillRect(pasteX, pasteY, qrSizePx, qrSizePx);
+      ctx.drawImage(qrImageElement, pasteX, pasteY, qrSizePx, qrSizePx);
       
       const blob = await new Promise<Blob | null>(resolve => canvas.toBlob(resolve, 'image/jpeg', 0.9));
       if (blob) {
@@ -242,52 +195,19 @@ export default function Home() {
     
     setIsProcessing(false);
     toast({ title: "Success!", description: "Your images have been generated and downloaded." });
-  }, [bgImage, links, qrConfigs, qrCount, bgDimensions, toast]);
-  
-  const handleQrCountChange = (value: string) => {
-    const count = value === '1' ? 1 : 2;
-    setQrCount(count);
-    setLinks([]);
-    setCsvFile(null);
-    if (csvInputRef.current) {
-        csvInputRef.current.value = "";
-    }
-  };
+  }, [bgImage, links, qrConfig, bgDimensions, toast]);
 
   const fileInputStyles = "file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-primary/10 file:text-primary hover:file:bg-primary/20 cursor-pointer";
-  
-  const QrConfigControls = ({ index }: { index: number }) => {
-    const config = qrConfigs[index];
-    if (!config) return null;
-
-    return (
-      <div className="space-y-6 pt-2">
-        <div className="space-y-4">
-          <Label>QR Size (cm): {config.qrSizeCm.toFixed(1)}</Label>
-          <Slider value={[config.qrSizeCm]} onValueChange={([v]) => handleQrConfigChange(index, 'qrSizeCm', v)} min={1} max={Math.min(bgDimensions.widthCm, bgDimensions.heightCm)} step={0.1}/>
-        </div>
-        <div className="space-y-4">
-          <Label>Top Margin (cm): {config.marginTopCm.toFixed(1)}</Label>
-          <Slider value={[config.marginTopCm]} onValueChange={([v]) => handleQrConfigChange(index, 'marginTopCm', v)} min={0} max={bgDimensions.heightCm - config.qrSizeCm} step={0.1}/>
-        </div>
-        <div className="space-y-4">
-          <Label>Right Margin (cm): {config.marginRightCm.toFixed(1)}</Label>
-          <Slider value={[config.marginRightCm]} onValueChange={([v]) => handleQrConfigChange(index, 'marginRightCm', v)} min={0} max={bgDimensions.widthCm - config.qrSizeCm} step={0.1}/>
-        </div>
-      </div>
-    );
-  };
 
   const csvDescription = useMemo(() => {
-    const cols = qrCount === 1 ? "'links'" : "'links1' and 'links2'";
-    return `File must have column(s) ${cols}. Found ${links.length} row(s).`
-  }, [qrCount, links.length]);
+    return `File must have column 'links'. Found ${links.length} row(s).`
+  }, [links.length]);
 
 
   return (
     <div className="min-h-screen bg-background text-foreground font-body">
       <header className="py-6 px-8 border-b border-border shadow-sm bg-card">
-        <h1 className="text-4xl font-bold font-headline text-primary">Uvify</h1>
+        <h1 className="text-4xl font-bold font-headline text-primary">Qreator</h1>
         <p className="text-muted-foreground mt-1">A simple tool to batch-create QR codes on images.</p>
       </header>
       
@@ -325,36 +245,19 @@ export default function Home() {
                   <Input id="bg-height" type="number" value={bgDimensions.heightCm} onChange={e => handleBgDimChange('heightCm', +e.target.value)} />
                 </div>
               </div>
-              <div className="space-y-2">
-                <Label>Number of QR Codes</Label>
-                <RadioGroup defaultValue="1" onValueChange={handleQrCountChange} className="flex gap-4 pt-1">
-                  <div className="flex items-center space-x-2">
-                    <RadioGroupItem value="1" id="r1" />
-                    <Label htmlFor="r1">One</Label>
-                  </div>
-                  <div className="flex items-center space-x-2">
-                    <RadioGroupItem value="2" id="r2" />
-                    <Label htmlFor="r2">Two</Label>
-                  </div>
-                </RadioGroup>
-              </div>
 
-               {qrCount === 1 ? (
-                 <QrConfigControls index={0} />
-               ) : (
-                 <Tabs defaultValue="qr1" className="w-full">
-                   <TabsList className="grid w-full grid-cols-2">
-                     <TabsTrigger value="qr1">QR 1 Settings</TabsTrigger>
-                     <TabsTrigger value="qr2">QR 2 Settings</TabsTrigger>
-                   </TabsList>
-                   <TabsContent value="qr1">
-                     <QrConfigControls index={0} />
-                   </TabsContent>
-                   <TabsContent value="qr2">
-                     <QrConfigControls index={1} />
-                   </TabsContent>
-                 </Tabs>
-               )}
+              <div className="space-y-4">
+                <Label>QR Size (cm): {qrConfig.qrSizeCm.toFixed(1)}</Label>
+                <Slider value={[qrConfig.qrSizeCm]} onValueChange={([v]) => handleQrConfigChange('qrSizeCm', v)} min={1} max={Math.min(bgDimensions.widthCm, bgDimensions.heightCm)} step={0.1}/>
+              </div>
+              <div className="space-y-4">
+                <Label>Top Margin (cm): {qrConfig.marginTopCm.toFixed(1)}</Label>
+                <Slider value={[qrConfig.marginTopCm]} onValueChange={([v]) => handleQrConfigChange('marginTopCm', v)} min={0} max={bgDimensions.heightCm - qrConfig.qrSizeCm} step={0.1}/>
+              </div>
+              <div className="space-y-4">
+                <Label>Right Margin (cm): {qrConfig.marginRightCm.toFixed(1)}</Label>
+                <Slider value={[qrConfig.marginRightCm]} onValueChange={([v]) => handleQrConfigChange('marginRightCm', v)} min={0} max={bgDimensions.widthCm - qrConfig.qrSizeCm} step={0.1}/>
+              </div>
             </CardContent>
           </Card>
           
@@ -381,17 +284,14 @@ export default function Home() {
                 {bgImage ? (
                   <>
                     <Image src={bgImage.url} alt="Background Preview" fill className="object-contain" />
-                    {previewStyles.map((style, index) => (
-                       <div 
-                        key={index}
-                        className="absolute bg-primary/50 border-2 border-dashed border-accent"
-                        style={{...style, aspectRatio: '1 / 1'}}
-                      >
-                        <div className="w-full h-full flex items-center justify-center">
-                          <p className="text-white text-xs font-bold bg-black/50 px-2 py-1 rounded-sm">QR {index+1}</p>
-                        </div>
+                    <div 
+                      className="absolute bg-primary/50 border-2 border-dashed border-accent"
+                      style={previewStyle}
+                    >
+                      <div className="w-full h-full flex items-center justify-center">
+                        <p className="text-white text-xs font-bold bg-black/50 px-2 py-1 rounded-sm">QR</p>
                       </div>
-                    ))}
+                    </div>
                   </>
                 ) : (
                   <div className="text-center text-muted-foreground p-8">
