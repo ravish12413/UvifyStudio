@@ -201,12 +201,12 @@ export default function Home() {
     let scaledHeightPercent: number;
     
     if (imageAspectRatio > containerAspectRatio) {
-        // Image is wider, letterboxed (top/bottom bars)
+        
         scaledWidthPercent = 100;
         scaledHeightPercent = (containerAspectRatio / imageAspectRatio) * 100;
         offsetYPercent = (100 - scaledHeightPercent) / 2;
     } else {
-        // Image is taller, pillarboxed (left/right bars)
+        
         scaledHeightPercent = 100;
         scaledWidthPercent = (imageAspectRatio / containerAspectRatio) * 100;
         offsetXPercent = (100 - scaledWidthPercent) / 2;
@@ -227,102 +227,170 @@ export default function Home() {
 
   }, [qrConfig, bgDimensions, bgImage]);
 
-
   const generateImages = useCallback(async () => {
-    if (!bgImage || links.length === 0) {
-      toast({ variant: "destructive", title: "Missing Inputs", description: "Please upload a background image and a valid CSV with links." });
-      return;
-    }
+  if (!bgImage || links.length === 0) {
+    toast({
+      variant: "destructive",
+      title: "Missing Inputs",
+      description: "Please upload a background image and a valid CSV with links.",
+    });
+    return;
+  }
 
-    setIsProcessing(true);
-    setProgress(0);
+  setIsProcessing(true);
+  setProgress(0);
 
-    const zip = new JSZip();
-    const canvas = document.createElement("canvas");
-    const ctx = canvas.getContext("2d");
-    if (!ctx) {
-      toast({ variant: "destructive", title: "Error", description: "Could not create a canvas context." });
-      setIsProcessing(false);
-      return;
-    }
-    
-    const outputWidthPx = cmToPx(bgDimensions.widthCm);
-    const outputHeightPx = cmToPx(bgDimensions.heightCm);
-    canvas.width = outputWidthPx;
-    canvas.height = outputHeightPx;
+  const outputWidthPx = cmToPx(bgDimensions.widthCm);
+  const outputHeightPx = cmToPx(bgDimensions.heightCm);
+  const qrSizePx = cmToPx(qrConfig.qrSizeCm);
 
-    const bgImageElement = document.createElement('img');
-    bgImageElement.src = bgImage.url;
-    await new Promise(resolve => { bgImageElement.onload = resolve; });
+  const bgImageElement = document.createElement("img");
+  bgImageElement.src = bgImage.url;
+  await new Promise(resolve => { bgImageElement.onload = resolve; });
 
-    // Calculate scaling to fit image while preserving aspect ratio
-    const canvasAspectRatio = outputWidthPx / outputHeightPx;
-    const imageAspectRatio = bgImageElement.width / bgImageElement.height;
-    let drawWidth, drawHeight, offsetX, offsetY;
+  const canvasAspectRatio = outputWidthPx / outputHeightPx;
+  const imageAspectRatio = bgImageElement.width / bgImageElement.height;
+  let drawWidth, drawHeight, offsetX, offsetY;
 
-    if (imageAspectRatio > canvasAspectRatio) {
-      // Image is wider than canvas, letterbox (top/bottom bars)
-      drawWidth = outputWidthPx;
-      drawHeight = drawWidth / imageAspectRatio;
-      offsetX = 0;
-      offsetY = (outputHeightPx - drawHeight) / 2;
-    } else {
-      // Image is taller than canvas, pillarbox (left/right bars)
-      drawHeight = outputHeightPx;
-      drawWidth = drawHeight * imageAspectRatio;
-      offsetX = (outputWidthPx - drawWidth) / 2;
-      offsetY = 0;
-    }
+  if (imageAspectRatio > canvasAspectRatio) {
+    drawWidth = outputWidthPx;
+    drawHeight = drawWidth / imageAspectRatio;
+    offsetX = 0;
+    offsetY = (outputHeightPx - drawHeight) / 2;
+  } else {
+    drawHeight = outputHeightPx;
+    drawWidth = drawHeight * imageAspectRatio;
+    offsetX = (outputWidthPx - drawWidth) / 2;
+    offsetY = 0;
+  }
 
-    for (let i = 0; i < links.length; i++) {
-      const link = links[i].links;
+  const BATCH_SIZE = 4;
+  const IMAGES_PER_ZIP = 2000;
 
-      // Clear canvas and draw background (you can set a fill color for padding)
-      ctx.fillStyle = "white"; // Or another color for the padding
-      ctx.fillRect(0, 0, outputWidthPx, outputHeightPx);
-      ctx.drawImage(bgImageElement, offsetX, offsetY, drawWidth, drawHeight);
-      
-      const qrDataUrl = await QRCode.toDataURL(link, { 
-          errorCorrectionLevel: 'H', 
+  const zipFiles: JSZip[] = [];
+  const zipImageCounts: number[] = [];
+
+  for (let i = 0; i < links.length; i += BATCH_SIZE) {
+    const batch = links.slice(i, i + BATCH_SIZE);
+
+    const blobs = await Promise.all(
+      batch.map(async (entry, index) => {
+        const canvas = document.createElement("canvas");
+        const ctx = canvas.getContext("2d")!;
+        canvas.width = outputWidthPx;
+        canvas.height = outputHeightPx;
+
+        const link = entry.links;
+
+        ctx.fillStyle = "white";
+        ctx.fillRect(0, 0, outputWidthPx, outputHeightPx);
+        ctx.drawImage(bgImageElement, offsetX, offsetY, drawWidth, drawHeight);
+
+        const qrDataUrl = await QRCode.toDataURL(link, {
+          errorCorrectionLevel: 'H',
           margin: 0,
-          scale: 10, // High scale for good quality, will be downscaled by drawImage
-          color: { light: '#FFFFFF00' } // Transparent background for QR
-      });
+          scale: 10,
+          color: { light: '#FFFFFF00' }
+        });
 
-      const qrImageElement = document.createElement('img');
-      qrImageElement.src = qrDataUrl;
-      await new Promise(resolve => { qrImageElement.onload = resolve; });
+        const qrImageElement = document.createElement('img');
+        qrImageElement.src = qrDataUrl;
+        await new Promise(resolve => { qrImageElement.onload = resolve; });
 
-      const qrSizePx = cmToPx(qrConfig.qrSizeCm);
-      const pasteX = offsetX + drawWidth - qrSizePx - cmToPx(qrConfig.marginRightCm);
-      const pasteY = offsetY + cmToPx(qrConfig.marginTopCm);
-      
-      // Draw a white square behind the QR code for readability
-      ctx.fillStyle = "white";
-      ctx.fillRect(pasteX, pasteY, qrSizePx, qrSizePx);
-      ctx.drawImage(qrImageElement, pasteX, pasteY, qrSizePx, qrSizePx);
-      
-      const blob = await new Promise<Blob | null>(resolve => canvas.toBlob(resolve, 'image/jpeg', 0.9));
-      if (blob) {
-        const dpiBlob = await setDpi(blob, DPI);
-        zip.file(`qr_image_${i + 1}.jpg`, dpiBlob);
+        const pasteX = offsetX + drawWidth - qrSizePx - cmToPx(qrConfig.marginRightCm);
+        const pasteY = offsetY + cmToPx(qrConfig.marginTopCm);
+
+        ctx.fillStyle = "white";
+        ctx.fillRect(pasteX, pasteY, qrSizePx, qrSizePx);
+        ctx.drawImage(qrImageElement, pasteX, pasteY, qrSizePx, qrSizePx);
+
+        const blob = await new Promise<Blob | null>(resolve =>
+          canvas.toBlob(resolve, 'image/jpeg', 0.9)
+        );
+
+        if (blob) {
+          return { blob: await setDpi(blob, DPI), link };
+        }
+
+        return null;
+      })
+    );
+
+    // Save each image to its zip
+    blobs.forEach((item, batchIndex) => {
+      if (!item) return;
+      const fullIndex = i + batchIndex;
+      const { blob, link } = item;
+
+      const zipIndex = Math.floor(fullIndex / IMAGES_PER_ZIP);
+      if (!zipFiles[zipIndex]) {
+        zipFiles[zipIndex] = new JSZip();
+        zipImageCounts[zipIndex] = 0;
       }
-      
-      setProgress(((i + 1) / links.length) * 100);
+
+      const query = link.split("?")[1];
+      let fileName = "";
+
+      if (query) {
+        const params = new URLSearchParams(query);
+        const lastParam = Array.from(params.values()).pop();
+        fileName = lastParam?.replace(/[^a-zA-Z0-9_-]/g, "_") || "";
+      }
+
+      if (!fileName) {
+        fileName = `qr_image_${String(fullIndex + 1).padStart(4, "0")}`;
+      }
+
+      zipFiles[zipIndex].file(`${fileName}.jpg`, blob);
+      zipImageCounts[zipIndex]++;
+    });
+
+    setProgress(((i + BATCH_SIZE) / links.length) * 100);
+
+    // Immediately flush any full zip(s)
+    for (let z = 0; z < zipFiles.length; z++) {
+      if (zipFiles[z] && zipImageCounts[z] === IMAGES_PER_ZIP) {
+        const zipBlob = await zipFiles[z].generateAsync({ type: "blob" });
+
+        const a = document.createElement("a");
+        a.href = URL.createObjectURL(zipBlob);
+        a.download = `uvify_part${z + 1}.zip`;
+
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(a.href);
+
+        zipFiles[z] = null as any; // mark flushed
+        zipImageCounts[z] = 0;
+      }
     }
-    
-    const zipBlob = await zip.generateAsync({ type: "blob" });
-    const a = document.createElement("a");
-    a.href = URL.createObjectURL(zipBlob);
-    a.download = "uvify_outputs.zip";
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(a.href);
-    
-    setIsProcessing(false);
-    toast({ title: "Success!", description: "Your images have been generated and downloaded." });
-  }, [bgImage, links, qrConfig, bgDimensions, toast]);
+  }
+
+  // Final flush for any partial zips
+  for (let z = 0; z < zipFiles.length; z++) {
+    if (zipFiles[z]) {
+      const zipBlob = await zipFiles[z].generateAsync({ type: "blob" });
+
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(zipBlob);
+      a.download = `uvify_part${z + 1}.zip`;
+
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(a.href);
+    }
+  }
+
+  setIsProcessing(false);
+  toast({
+    title: "Success!",
+    description: "All images and ZIP files have been generated and downloaded.",
+  });
+}, [bgImage, links, qrConfig, bgDimensions, toast]);
+
+
 
   const fileInputStyles = "file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-primary/10 file:text-primary hover:file:bg-primary/20 cursor-pointer";
 
