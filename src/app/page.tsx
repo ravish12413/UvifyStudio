@@ -36,10 +36,7 @@ const setDpi = (blob: Blob, dpi: number): Promise<Blob> => {
         }
         const view = new DataView(arrayBuffer);
         const segments = [];
-        let offset = 0;
-
-        // SOI
-        offset += 2;
+        let offset = 2; // Skip SOI
 
         while (offset < view.byteLength) {
             const marker = view.getUint16(offset);
@@ -49,37 +46,44 @@ const setDpi = (blob: Blob, dpi: number): Promise<Blob> => {
                 const len = view.getUint16(offset);
                 // Skip this segment, we will replace it.
                 offset += len;
-            } else if (marker >= 0xFFD0 && marker <= 0xFFD9 || marker === 0xFF01) { // Markers without length
-                // No length field
-            } else if (marker === 0xFFDA) { // SOS - Start of Scan
-                // The rest of the file is image data, copy it and break
+                continue;
+            }
+            
+            if (marker >= 0xFFD0 && marker <= 0xFFD9 || marker === 0xFF01) { // Markers without length
+                continue;
+            }
+
+            if (marker === 0xFFDA) { // SOS
                 segments.push(arrayBuffer.slice(offset - 2));
                 break;
-            } else { // Other markers
-                const len = view.getUint16(offset);
-                segments.push(arrayBuffer.slice(offset-2, offset + len));
-                offset += len;
             }
+
+            const len = view.getUint16(offset);
+            if (len < 2) {
+                // Invalid segment length
+                break;
+            }
+            segments.push(arrayBuffer.slice(offset - 2, offset + len));
+            offset += len;
         }
         
-        // Create new APP0 segment
+        // Create new APP0 segment for JFIF
         const app0Data = new Uint8Array(16);
         const app0View = new DataView(app0Data.buffer);
         app0View.setUint16(0, 0xFFE0); // APP0 marker
         app0View.setUint16(2, 16); // Length of segment
-        // JFIF\0
-        app0View.setUint8(4, 0x4A);
-        app0View.setUint8(5, 0x46);
-        app0View.setUint8(6, 0x49);
-        app0View.setUint8(7, 0x46);
-        app0View.setUint8(8, 0x00);
-        app0View.setUint16(9, 0x0101); // Version 1.1
+        app0View.setUint8(4, 0x4A); // J
+        app0View.setUint8(5, 0x46); // F
+        app0View.setUint8(6, 0x49); // I
+        app0View.setUint8(7, 0x46); // F
+        app0View.setUint8(8, 0x00); // \0
+        app0View.setUint16(9, 0x0101); // Version 1.01
         app0View.setUint8(11, 1); // Units: 1 for DPI
         app0View.setUint16(12, dpi); // X density
         app0View.setUint16(14, dpi); // Y density
 
         const soi = new Uint8Array([0xFF, 0xD8]); // SOI marker
-        const newBlobParts = [soi, app0Data, ...segments];
+        const newBlobParts = [soi, app0Data, ...segments.map(s => new Uint8Array(s))];
         
         resolve(new Blob(newBlobParts, { type: 'image/jpeg' }));
 
@@ -133,7 +137,6 @@ export default function Home() {
         skipEmptyLines: true,
         transformHeader: header => header.trim(),
         complete: (results) => {
-          // We'll ignore the "Unable to auto-detect" warning since we explicitly set the delimiter.
           const criticalErrors = results.errors.filter(e => e.code !== 'UndetectableDelimiter');
           if (criticalErrors.length > 0) {
               toast({ variant: "destructive", title: "CSV Parsing Error", description: criticalErrors[0].message });
@@ -228,16 +231,38 @@ export default function Home() {
     bgImageElement.src = bgImage.url;
     await new Promise(resolve => { bgImageElement.onload = resolve; });
 
+    // Calculate scaling to fit image while preserving aspect ratio
+    const canvasAspectRatio = outputWidthPx / outputHeightPx;
+    const imageAspectRatio = bgImageElement.width / bgImageElement.height;
+    let drawWidth, drawHeight, offsetX, offsetY;
+
+    if (imageAspectRatio > canvasAspectRatio) {
+      // Image is wider than canvas, letterbox (top/bottom bars)
+      drawWidth = outputWidthPx;
+      drawHeight = drawWidth / imageAspectRatio;
+      offsetX = 0;
+      offsetY = (outputHeightPx - drawHeight) / 2;
+    } else {
+      // Image is taller than canvas, pillarbox (left/right bars)
+      drawHeight = outputHeightPx;
+      drawWidth = drawHeight * imageAspectRatio;
+      offsetX = (outputWidthPx - drawWidth) / 2;
+      offsetY = 0;
+    }
+
     for (let i = 0; i < links.length; i++) {
       const link = links[i].links;
-      
-      ctx.drawImage(bgImageElement, 0, 0, outputWidthPx, outputHeightPx);
+
+      // Clear canvas and draw background (you can set a fill color for padding)
+      ctx.fillStyle = "white"; // Or another color for the padding
+      ctx.fillRect(0, 0, outputWidthPx, outputHeightPx);
+      ctx.drawImage(bgImageElement, offsetX, offsetY, drawWidth, drawHeight);
       
       const qrDataUrl = await QRCode.toDataURL(link, { 
           errorCorrectionLevel: 'H', 
           margin: 0,
-          scale: 10,
-          color: { light: '#FFFFFF00' }
+          scale: 10, // High scale for good quality, will be downscaled by drawImage
+          color: { light: '#FFFFFF00' } // Transparent background for QR
       });
 
       const qrImageElement = document.createElement('img');
@@ -245,9 +270,11 @@ export default function Home() {
       await new Promise(resolve => { qrImageElement.onload = resolve; });
 
       const qrSizePx = cmToPx(qrConfig.qrSizeCm);
-      const pasteX = outputWidthPx - qrSizePx - cmToPx(qrConfig.marginRightCm);
-      const pasteY = cmToPx(qrConfig.marginTopCm);
+      // Calculate placement based on the scaled image, not the whole canvas
+      const pasteX = offsetX + drawWidth - qrSizePx - cmToPx(qrConfig.marginRightCm);
+      const pasteY = offsetY + cmToPx(qrConfig.marginTopCm);
       
+      // Draw a white square behind the QR code for readability
       ctx.fillStyle = "white";
       ctx.fillRect(pasteX, pasteY, qrSizePx, qrSizePx);
       ctx.drawImage(qrImageElement, pasteX, pasteY, qrSizePx, qrSizePx);
@@ -354,7 +381,7 @@ export default function Home() {
           <Card className="sticky top-8 shadow-lg">
              <CardHeader>
                 <CardTitle>Live Preview</CardTitle>
-                <CardDescription>A representation of your final image layout.</CardDescription>
+                <CardDescription>A representation of your final image layout. The QR code will be placed relative to the background image content, which will be centered and scaled to fit.</CardDescription>
              </CardHeader>
              <CardContent>
                <div className="aspect-video bg-muted/50 rounded-lg flex items-center justify-center relative overflow-hidden border">
